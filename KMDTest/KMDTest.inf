@@ -1,0 +1,86 @@
+;
+; KMDTest.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=Sample ; TODO: edit Class
+ClassGuid={78A1C341-4539-11d3-B88D-00C04FAD5171} ; TODO: edit ClassGuid
+Provider=%ManufacturerName%
+CatalogFile=KMDTest.cat
+DriverVer= ; TODO: set DriverVer in stampinf property pages
+
+[DestinationDirs]
+DefaultDestDir = 12
+KMDTest_Device_CoInstaller_CopyFiles = 11
+
+; ================= Class section =====================
+
+[ClassInstall32]
+Addreg=SampleClassReg
+
+[SampleClassReg]
+HKR,,,0,%ClassName%
+HKR,,Icon,,-5
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+KMDTest.sys  = 1,,
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll=1 ; make sure the number matches with SourceDisksNames
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%KMDTest.DeviceDesc%=KMDTest_Device, Root\KMDTest ; TODO: edit hw-id
+
+[KMDTest_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+KMDTest.sys
+
+;-------------- Service installation
+[KMDTest_Device.NT.Services]
+AddService = KMDTest,%SPSVCINST_ASSOCSERVICE%, KMDTest_Service_Inst
+
+; -------------- KMDTest driver install sections
+[KMDTest_Service_Inst]
+DisplayName    = %KMDTest.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\KMDTest.sys
+
+;
+;--- KMDTest_Device Coinstaller installation ------
+;
+
+[KMDTest_Device.NT.CoInstallers]
+AddReg=KMDTest_Device_CoInstaller_AddReg
+CopyFiles=KMDTest_Device_CoInstaller_CopyFiles
+
+[KMDTest_Device_CoInstaller_AddReg]
+HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
+
+[KMDTest_Device_CoInstaller_CopyFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll
+
+[KMDTest_Device.NT.Wdf]
+KmdfService =  KMDTest, KMDTest_wdfsect
+[KMDTest_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+ClassName="Samples" ; TODO: edit ClassName
+DiskName = "KMDTest Installation Disk"
+KMDTest.DeviceDesc = "KMDTest Device"
+KMDTest.SVCDESC = "KMDTest Service"
