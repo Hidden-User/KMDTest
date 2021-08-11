@@ -131,6 +131,9 @@ void PloadImageNotifyRoutine(PUNICODE_STRING FullImageName, HANDLE ProcessId, PI
 	IMAGE_NT_HEADERS32* nt32 = NULL;
 	//IMAGE_NT_HEADERS64* nt64 = NULL;
 	IMAGE_EXPORT_DIRECTORY* IED = NULL;
+	char* cb = NULL;
+	int* ib = NULL;
+	int t;
 	SIZE_T imageLength;
 	//PUNICODE_STRING str;
 	//PIMAGE_INFO_EX ex_image;
@@ -190,7 +193,11 @@ void PloadImageNotifyRoutine(PUNICODE_STRING FullImageName, HANDLE ProcessId, PI
 		return;
 	}
 
-	
-	DbgPrint(">>MDR: 1st export func name from %ws: %ws", FullImageName->Buffer, IED->AddressOfNames + (LONG)ImageInfo->ImageBase);
+	ib = (int*)(IED->AddressOfNames + (LONG)idh);
+	for (t = 0; t < (int)IED->NumberOfNames; t++) {
+		cb = (char*)((LONG)ib[t] + (LONG)idh);
+		DbgPrint(">>MDR: ¹%d export func name from %ws: %s", t, FullImageName->Buffer, cb);
+	}
+	//DbgPrint(">>MDR: 1st export func name from %ws: %s", FullImageName->Buffer, cb);
 
 }
