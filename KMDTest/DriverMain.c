@@ -81,7 +81,7 @@ typedef struct _OldCode {
 
 #pragma pack (pop)
 
-const wchar_t message[] = L"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const wchar_t randomString[] = L"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const wchar_t system[] = L"System";
 const unsigned sysLen = 12u;
 const char origProlog[] = { 0x8b, 0xff, 0x55, 0x8b, 0xec };
@@ -265,6 +265,31 @@ VOID unload(PDRIVER_OBJECT DO)
 
 	DbgPrint(">>MDR: DriverUnload");
 
+#ifndef INTERCEPTION
+	PsRemoveLoadImageNotifyRoutine(PloadImageNotifyRoutine);
+#else
+	__asm {
+		cli
+		mov EAX, CR0
+		mov CR0Reg, EAX
+		and EAX, 0xFFFEFFFF
+		mov CR0, EAX
+	}
+
+	origFunc = (char*)KeServiceDescriptorTable->ntoskrnl.ServiceTable[NtQueryProcId];
+
+	for (t = 0; t < sizeof(origProlog); t++) {
+		origFunc[t] = origProlog[t];
+	}
+
+	__asm {
+		mov EAX, CR0Reg
+		mov CR0, EAX
+		sti
+	}
+
+#endif // !INTERCEPTION
+
 	pdo = DO->DeviceObject;
 
 	for (t = 0; pdo != NULL; t++) {
@@ -280,31 +305,6 @@ VOID unload(PDRIVER_OBJECT DO)
 		IoDeleteDevice(pde->pdo);
 
 	}
-
-#ifndef INTERCEPTION
-	PsRemoveLoadImageNotifyRoutine(PloadImageNotifyRoutine);
-#else
-	__asm {
-		cli
-		mov EAX, CR0
-		mov CR0Reg, EAX
-		and EAX, 0xFFFEFFFF
-		mov CR0, EAX
-	}
-
-	origFunc = (char*)origNtQuerySystemInformation;
-
-	for (t = 0; t < sizeof(origProlog); t++) {
-		origFunc[t] = origProlog[t];
-	}
-
-	__asm {
-		mov EAX, CR0Reg
-		mov CR0, EAX
-		sti
-	}
-
-#endif // !INTERCEPTION
 
 }
 
@@ -395,11 +395,12 @@ NTSTATUS _interceptor(ULONG SystemInformationClass, PVOID SystemInformation, ULO
 NTSTATUS newNtQuerySystemInformation(ULONG SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength)
 {
 	NTSTATUS result;
-	NTSTATUS inRes;
-	PVOID inBuff;
+	//NTSTATUS inRes;
+	//PVOID inBuff;
 	SYSTEM_PROCESS_INFORMATION* spi;
-	SIZE_T len;
+	//SIZE_T len;
 	ULONG length;
+	UNICODE_STRING *ustr;
 	int i;
 	
 	result = _interceptor(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
@@ -415,59 +416,48 @@ NTSTATUS newNtQuerySystemInformation(ULONG SystemInformationClass, PVOID SystemI
 	if (SystemInformationClass == 0x05) {
 		length = 0;
 		spi = (SYSTEM_PROCESS_INFORMATION*)SystemInformation;
+		ustr = NULL;
 		while (length < SystemInformationLength)
 		{
 			if (spi->ImageName.Length == sysLen) {
 				if (memcmp(spi->ImageName.Buffer, system, sysLen) == 0) {
-					if (spi->ImageName.MaximumLength > sizeof(message)) {
+					if (spi->ImageName.MaximumLength > sizeof(randomString)) {
 						for (i = 0; i < 15; i++) {
-							spi->ImageName.Buffer[i] = message[i];
+							spi->ImageName.Buffer[i] = randomString[i];
 						}
-						spi->ImageName.Length = sizeof(message) - 2u;
+						spi->ImageName.Length = sizeof(randomString) - 2u;
 					}
 					else {
-						inBuff = NULL;
-						len = sizeof(message);
-						inRes = ZwAllocateVirtualMemory(ZwCurrentProcess(), &inBuff, (ULONG_PTR)NULL, &len, MEM_COMMIT, PAGE_READWRITE);
-						if (inRes == STATUS_SUCCESS) {
-							spi->ImageName.Buffer = (PWCH)inBuff;
-							spi->ImageName.MaximumLength = (USHORT)len;
-							spi->ImageName.Length = sizeof(message) - 2u;
-							memcpy(spi->ImageName.Buffer, message, sizeof(message));
-						}
+						ustr = &(spi->ImageName);
+
+						//inBuff = NULL;
+						//len = sizeof(randomString);
+						//inRes = ZwAllocateVirtualMemory(ZwCurrentProcess(), &inBuff, (ULONG_PTR)NULL, &len, MEM_COMMIT, PAGE_READWRITE);
+						//if (inRes == STATUS_SUCCESS) {
+						//	spi->ImageName.Buffer = (PWCH)inBuff;
+						//	spi->ImageName.MaximumLength = (USHORT)len;
+						//	spi->ImageName.Length = sizeof(randomString) - 2u;
+						//	memcpy(spi->ImageName.Buffer, randomString, sizeof(randomString));
+						//}
 					}
 				}
 			}
-			//if (spi->ImageName.MaximumLength >= sizeof(message)) {
-			//	for (i = 0; i < 7; i++) {
-			//		spi->ImageName.Buffer[i] = message[i];
-			//	}
-			//	spi->ImageName.Length = 12u;
-			//}
 			if (spi->NextEntryOffset == 0) {
 				break;
 			}
 			length += spi->NextEntryOffset;
 			*((ULONG*)&spi) += spi->NextEntryOffset;
 		}
-	}
+		if (ustr != NULL) {
+			if (length + sizeof(randomString) < SystemInformationLength) {
+				ustr->Length = sizeof(randomString) - 2u;
+				ustr->MaximumLength = sizeof(randomString);
+				ustr->Buffer = (PWCHAR)((ULONG)SystemInformation + SystemInformationLength - sizeof(randomString));
+				memcpy(ustr->Buffer, randomString, sizeof(randomString));
+			}
 
-	//if (SystemInformationClass == 0x05) {
-	//	length = 0;
-	//	spi = (SYSTEM_PROCESS_INFORMATION*)SystemInformation;
-	//	while (length < SystemInformationLength)
-	//	{
-	//		if (spi->ImageName.Length < spi->ImageName.MaximumLength) {
-	//			spi->ImageName.Buffer[spi->ImageName.Length++] = L'*';
-	//			spi->ImageName.Buffer[spi->ImageName.Length] = L'\n';
-	//		}
-	//		if (spi->NextEntryOffset == 0) {
-	//			break;
-	//		}
-	//		length += spi->NextEntryOffset;
-	//		*((ULONG*)&spi) += spi->NextEntryOffset;
-	//	}
-	//}
+		}
+	}
 	
 	return result;
 }
